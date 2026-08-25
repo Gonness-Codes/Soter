@@ -93,11 +93,121 @@ class TestHumanitarianVerificationService:
         )
 
         assert result["prompt_variant"] == "fallback"
+        assert result["prompt_name"] == "humanitarian_fallback"
+        assert result["prompt_version"] == "v1"
         assert result["provider"] == "openai"
         assert result["verification"]["verdict"] == "inconclusive"
 
         mock_labels.assert_called_with(step_name="verify")
         mock_observe.assert_called_once()
+
+    def test_verify_claim_records_primary_prompt_version_and_name(self, monkeypatch):
+        captured_prompts = []
+
+        mock_provider = MagicMock(spec=ModelProvider)
+
+        def fake_chat(system_prompt, user_prompt, *, model=None, timeout=None):
+            captured_prompts.append({"system": system_prompt, "user": user_prompt})
+            return LLMResponse(
+                content='{"verdict":"credible","confidence":0.9,"summary":"valid claim"}',
+                provider="openai",
+                model=model or "test-model",
+            )
+
+        mock_provider.llm_chat.side_effect = fake_chat
+        mock_registry = MagicMock(spec=ProviderRegistry)
+        mock_registry.resolve_llm.return_value = [("openai", mock_provider)]
+        monkeypatch.setattr(self.service, "registry", mock_registry)
+        monkeypatch.setattr(
+            self.service, "_get_model_for_provider", lambda provider: "test-model"
+        )
+
+        result = self.service.verify_claim(
+            aid_claim="Clean water distribution verified across 4 sectors.",
+            supporting_evidence=["WASH log #10"],
+            context_factors={"district": "North"},
+            provider_preference="openai",
+        )
+
+        assert result["prompt_variant"] == "primary"
+        assert result["prompt_name"] == "humanitarian_primary"
+        assert result["prompt_version"] == "v1"
+        assert "Sphere Criteria" in captured_prompts[0]["user"]
+        assert "Humanitarian Standard Verification Task\n\n" in captured_prompts[0]["user"]
+
+    def test_verify_claim_version_switch_uses_actual_v2_prompt(self, monkeypatch):
+        captured_prompts = []
+
+        mock_provider = MagicMock(spec=ModelProvider)
+
+        def fake_chat(system_prompt, user_prompt, *, model=None, timeout=None):
+            captured_prompts.append({"system": system_prompt, "user": user_prompt})
+            return LLMResponse(
+                content='{"verdict":"credible","confidence":0.95,"summary":"v2 validated"}',
+                provider="openai",
+                model=model or "test-model",
+            )
+
+        mock_provider.llm_chat.side_effect = fake_chat
+        mock_registry = MagicMock(spec=ProviderRegistry)
+        mock_registry.resolve_llm.return_value = [("openai", mock_provider)]
+        monkeypatch.setattr(self.service, "registry", mock_registry)
+        monkeypatch.setattr(
+            self.service, "_get_model_for_provider", lambda provider: "test-model"
+        )
+
+        # Switch active primary prompt version to v2
+        self.service.prompt_registry.set_active_version("humanitarian_primary", "v2")
+
+        result = self.service.verify_claim(
+            aid_claim="Shelter distribution completed.",
+            supporting_evidence=["receipts"],
+            context_factors={},
+            provider_preference="openai",
+        )
+
+        assert result["prompt_variant"] == "primary"
+        assert result["prompt_name"] == "humanitarian_primary"
+        assert result["prompt_version"] == "v2"
+        # Assert the prompt actually sent to the LLM matches v2 template
+        assert "Humanitarian Standard Verification Task (v2 Enhanced)" in captured_prompts[0]["user"]
+
+    def test_verify_claim_with_explicit_request_prompt_version(self, monkeypatch):
+        captured_prompts = []
+
+        mock_provider = MagicMock(spec=ModelProvider)
+
+        def fake_chat(system_prompt, user_prompt, *, model=None, timeout=None):
+            captured_prompts.append({"system": system_prompt, "user": user_prompt})
+            return LLMResponse(
+                content='{"verdict":"credible","confidence":0.88,"summary":"explicit v2"}',
+                provider="openai",
+                model=model or "test-model",
+            )
+
+        mock_provider.llm_chat.side_effect = fake_chat
+        mock_registry = MagicMock(spec=ProviderRegistry)
+        mock_registry.resolve_llm.return_value = [("openai", mock_provider)]
+        monkeypatch.setattr(self.service, "registry", mock_registry)
+        monkeypatch.setattr(
+            self.service, "_get_model_for_provider", lambda provider: "test-model"
+        )
+
+        # Default active is v1, but we request v2 explicitly
+        result = self.service.verify_claim(
+            aid_claim="Food kit delivered.",
+            supporting_evidence=["WFP receipt"],
+            context_factors={},
+            provider_preference="openai",
+            prompt_version="v2",
+        )
+
+        assert result["prompt_version"] == "v2"
+        assert "Humanitarian Standard Verification Task (v2 Enhanced)" in captured_prompts[0]["user"]
+
+    def test_get_prompt_version(self):
+        assert self.service.get_prompt_version("humanitarian_primary") in ["v1", "v2"]
+        assert self.service.get_prompt_version("humanitarian_fallback") in ["v1", "v2"]
 
     def test_verify_claim_fails_when_no_provider_configured(self, monkeypatch):
         mock_registry = MagicMock(spec=ProviderRegistry)

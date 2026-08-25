@@ -77,6 +77,8 @@ class Settings(BaseSettings):
     ai_deterministic_mode: bool = False
     test_provider_mode: bool = False
     llm_timeout_seconds: int = 30
+    humanitarian_primary_prompt_version: str = "v1"
+    humanitarian_fallback_prompt_version: str = "v1"
 
     # Request throttling
     request_rate_limit: str = "10/minute"
