@@ -9,6 +9,11 @@ All prompts are versioned and managed through a PromptRegistry.
 from typing import Any, Dict, List, Optional
 from services.prompt_registry import VerificationPrompt, PromptRegistry
 
+#: Version of the prompt templates below. Bump this whenever the system or
+#: user prompt text changes so decision audit records (issue #990) can tie a
+#: past decision to the exact prompt that produced it.
+HUMANITARIAN_PROMPT_VERSION = "humanitarian-sphere-v1"
+
 SPHERE_HANDBOOK_CRITERIA: Dict[str, List[str]] = {
     "water_supply_sanitation_hygiene": [
         "Minimum daily water access is sufficient and equitable.",
@@ -76,6 +81,10 @@ def format_context_factors(context_factors: Dict[str, Any]) -> str:
 class HumanitarianPrimaryPromptV1(VerificationPrompt):
     """v1 Primary verification prompt grounded in standard Sphere criteria."""
 
+    #: Exposed on the instance so callers (notably the decision audit trail)
+    #: can record which prompt version produced a decision.
+    prompt_version: str = HUMANITARIAN_PROMPT_VERSION
+
     @property
     def name(self) -> str:
         return "humanitarian_primary"
@@ -129,6 +138,18 @@ class HumanitarianPrimaryPromptV1(VerificationPrompt):
         )
 
         return {"system": system_prompt, "user": user_prompt}
+
+    def build_primary_prompt(
+        self,
+        aid_claim: str,
+        supporting_evidence: List[str],
+        context_factors: Dict[str, Any],
+    ) -> Dict[str, str]:
+        return self.build_prompt(
+            aid_claim=aid_claim,
+            supporting_evidence=supporting_evidence,
+            context_factors=context_factors,
+        )
 
 
 class HumanitarianFallbackPromptV1(VerificationPrompt):
