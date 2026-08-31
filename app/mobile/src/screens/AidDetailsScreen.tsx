@@ -20,18 +20,25 @@ import {
   ClaimTimelineStatus,
   ClaimStatus,
   fetchAidDetails,
-  getMockAidDetails,
 } from '../services/aidApi';
+import {
+  cacheAidDetails,
+  loadCachedAidDetails,
+  getAidDetailsCacheTimestamp,
+} from '../services/aidCache';
 import { useSync } from '../contexts/SyncContext';
 import { useSaverMode } from '../contexts/SaverModeContext';
 import { SaverModeBanner } from '../components/SaverModeBanner';
 import { getTxExplorerUrl } from '../explorerUtils';
+import { DataFreshnessIndicator } from '../components/DataFreshnessIndicator';
+import { useTranslation } from '../i18n/useTranslation';
 
 type Props = NativeStackScreenProps<RootStackParamList, 'AidDetails'>;
 
 export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
   const { aidId } = route.params;
   const { colors } = useTheme();
+  const { t } = useTranslation();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const { biometricEnabled, authenticate, confirmValueAction } = useBiometric();
   const { active: saverModeActive, source: saverModeSource } = useSaverMode();
@@ -44,6 +51,8 @@ export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [isCached, setIsCached] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const {
     getActionsForAid,
@@ -85,13 +94,28 @@ export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
       try {
         const data = await fetchAidDetails(aidId);
         setDetails(data);
+        setIsCached(false);
         setError(null);
-      } catch {
-        setError('Unable to reach the server. Showing last known data.');
-        setDetails((current) => current ?? getMockAidDetails(aidId));
-      } finally {
+        await cacheAidDetails(aidId, data);
         const now = new Date().toISOString();
         setLastUpdated(now);
+        if (isRefresh) setRefreshMessage('Data refreshed successfully.');
+      } catch {
+        const cached = await loadCachedAidDetails(aidId);
+        if (cached) {
+          setDetails(cached);
+          setIsCached(true);
+          const ts = await getAidDetailsCacheTimestamp(aidId);
+          setLastUpdated(ts || new Date().toISOString());
+          setError('Unable to reach the server. Showing last known cached data.');
+          if (isRefresh) setRefreshMessage('Refresh failed. Showing the last cached data.');
+        } else {
+          setDetails(null);
+          setIsCached(false);
+          setError('Unable to reach the server. Aid details are unavailable offline.');
+          if (isRefresh) setRefreshMessage('Refresh failed. Server is unreachable.');
+        }
+      } finally {
         setLoading(false);
         setRefreshing(false);
       }
@@ -224,7 +248,7 @@ export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
           color={colors.brand.primary}
           accessibilityElementsHidden
         />
-        <Text style={styles.subtitle}>Verifying identity…</Text>
+        <Text style={styles.subtitle}>{t('aidDetails.verifyingIdentity')}</Text>
       </View>
     );
   }
@@ -237,7 +261,7 @@ export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         accessibilityLabel="Authentication required. Biometric verification is needed to view this screen."
       >
         <Text style={styles.lockIcon} accessibilityElementsHidden>🔒</Text>
-        <Text style={styles.title}>Authentication Required</Text>
+        <Text style={styles.title}>{t('aidDetails.authRequired')}</Text>
         <Text style={styles.subtitle}>
           Biometric verification is needed to view this screen.
         </Text>
@@ -248,14 +272,14 @@ export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
           onPress={requestAuth}
           activeOpacity={0.8}
         >
-          <Text style={styles.buttonText}>Try Again</Text>
+          <Text style={styles.buttonText}>{t('aidDetails.tryAgain')}</Text>
         </TouchableOpacity>
       </View>
     );
   }
 
   // authState === 'granted'
-  if (loading || !details) {
+  if (loading) {
     return (
       <View
         style={styles.centered}
@@ -268,7 +292,44 @@ export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
           color={colors.brand.primary}
           accessibilityElementsHidden
         />
-        <Text style={styles.subtitle}>Loading aid details...</Text>
+        <Text style={styles.subtitle}>{t('aidDetails.loading')}</Text>
+      </View>
+    );
+  }
+
+  if (!details) {
+    return (
+      <View
+        style={styles.centered}
+        accessible
+        accessibilityLabel="Aid details unavailable. Unable to connect to the server and no cached details exist."
+        accessibilityRole="alert"
+      >
+        <Text style={styles.unavailableIcon} accessibilityElementsHidden>
+          ⚠️
+        </Text>
+        <Text style={styles.title}>{t('aidDetails.title')}</Text>
+        <Text style={styles.unavailableText}>
+          {error ?? 'Unable to retrieve package details from the server and no cached data is available on this device.'}
+        </Text>
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Retry loading aid details"
+          style={[styles.button, { backgroundColor: colors.brand.primary }]}
+          onPress={() => loadDetails(false)}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.buttonText}>🔄 Retry Connection</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          accessibilityRole="button"
+          accessibilityLabel="Back to aid operations"
+          style={[styles.button, styles.secondaryButton]}
+          onPress={() => navigation.goBack()}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.secondaryButtonText}>{t('aidDetails.backToOverview')}</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -282,6 +343,8 @@ export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
       <SaverModeBanner visible={saverModeActive} source={saverModeSource} />
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
+      <DataFreshnessIndicator isCached={isCached} isConnected={isConnected} cachedAt={lastUpdated} refreshing={refreshing} refreshMessage={refreshMessage} onRefresh={() => loadDetails(true)} />
+
       <View style={styles.header}>
         <Text style={styles.title} accessibilityRole="header">
           {details.title}
@@ -323,7 +386,7 @@ export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
 
       {pendingActions.length > 0 ? (
         <View style={styles.syncCard}>
-          <Text style={styles.sectionTitle}>Sync Status</Text>
+          <Text style={styles.sectionTitle}>{t('aidDetails.syncStatus')}</Text>
           <Text style={styles.syncCardText}>
             {pendingActions.length} pending action{pendingActions.length === 1 ? '' : 's'}
             {isSyncing ? ' are syncing now.' : ' saved locally.'}
@@ -347,9 +410,9 @@ export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
           Recipient
         </Text>
         <View style={styles.card}>
-          <InfoRow label="Name" value={details.recipient.name} colors={colors} />
-          <InfoRow label="Recipient ID" value={details.recipient.id} colors={colors} />
-          <InfoRow label="Wallet" value={details.recipient.wallet} colors={colors} />
+          <InfoRow label={t('aidDetails.name')} value={details.recipient.name} colors={colors} />
+          <InfoRow label={t('aidDetails.recipientId')} value={details.recipient.id} colors={colors} />
+          <InfoRow label={t('aidDetails.wallet')} value={details.recipient.wallet} colors={colors} />
         </View>
       </View>
 
@@ -359,14 +422,14 @@ export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
           Package Details
         </Text>
         <View style={styles.card}>
-          <InfoRow label="Token Type" value={details.tokenType} colors={colors} />
+          <InfoRow label={t('aidDetails.tokenType')} value={details.tokenType} colors={colors} />
           <InfoRow
-            label="Amount"
+            label={t('aidDetails.amount')}
             value={`${details.amount} ${details.tokenType}`}
             colors={colors}
           />
-          <InfoRow label="Expiry Date" value={formatDate(details.expiryDate)} colors={colors} />
-          <InfoRow label="Claim ID" value={details.claimId} colors={colors} />
+          <InfoRow label={t('aidDetails.expiryDate')} value={formatDate(details.expiryDate)} colors={colors} />
+          <InfoRow label={t('aidDetails.claimId')} value={details.claimId} colors={colors} />
         </View>
       </View>
 
@@ -385,7 +448,7 @@ export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
 
       {details.status === 'disbursed' ? (
         <View style={styles.claimCompleteCard} accessibilityLiveRegion="polite">
-          <Text style={styles.claimCompleteTitle}>Claim completed</Text>
+          <Text style={styles.claimCompleteTitle}>{t('aidDetails.claimCompleted')}</Text>
           <Text style={styles.claimCompleteText}>
             This package has been disbursed. You can view your claim receipt now.
           </Text>
@@ -459,7 +522,7 @@ export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
           }}
           activeOpacity={0.8}
         >
-          <Text style={styles.buttonText}>View Receipt</Text>
+          <Text style={styles.buttonText}>{t('aidDetails.viewReceipt')}</Text>
         </TouchableOpacity>
       ) : null}
 
@@ -469,7 +532,7 @@ export const AidDetailsScreen: React.FC<Props> = ({ navigation, route }) => {
         onPress={() => navigation.navigate('EvidenceUpload', { aidId })}
         activeOpacity={0.8}
       >
-        <Text style={styles.buttonText}>Upload Evidence</Text>
+        <Text style={styles.buttonText}>{t('aidDetails.uploadEvidence')}</Text>
       </TouchableOpacity>
 
       {lastUpdated ? (
@@ -656,7 +719,7 @@ const TimelineMilestoneRow = ({
               onPress={handleCopyHash}
               activeOpacity={0.8}
             >
-              <Text style={styles.timelineActionText}>Copy hash</Text>
+              <Text style={styles.timelineActionText}>{t('aidDetails.copyHash')}</Text>
             </TouchableOpacity>
           </View>
         ) : null}
@@ -943,6 +1006,18 @@ const makeStyles = (colors: AppColors) =>
       backgroundColor: colors.background,
       padding: 32,
       gap: 16,
+    },
+    unavailableIcon: {
+      fontSize: 48,
+      marginBottom: 8,
+    },
+    unavailableText: {
+      fontSize: 14,
+      color: colors.textSecondary,
+      textAlign: 'center',
+      lineHeight: 20,
+      marginHorizontal: 16,
+      marginBottom: 8,
     },
     lockIcon: {
       fontSize: 48,

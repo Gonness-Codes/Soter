@@ -35,6 +35,7 @@ from api.routes import router as ocr_router
 from api.v1.router import v1_router
 
 from config import settings
+from request_limits import RequestSizeLimitMiddleware, clamp_request_timeout
 import tasks
 from proof_of_life import ProofOfLifeAnalyzer, ProofOfLifeConfig
 from schemas.anonymization import AnonymizeRequest, AnonymizeResponse
@@ -146,6 +147,7 @@ async def lifespan(app: FastAPI):
     # same keys via TestClient.app.state.
     app.state.artifact_access_control = evidence_access_control
     app.state.humanitarian_verification_service = humanitarian_verification_service
+    app.state.rate_limiter = rate_limiter
     app.state.is_shutting_down = False
     app.state.active_requests = 0
 
@@ -172,6 +174,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Lets metrics.bounded_endpoint_label() resolve raw request paths to their
+# registered route templates (see metrics.py's cardinality guidance).
+metrics.bind_app(app)
+
+app.add_middleware(RequestSizeLimitMiddleware)
+
 proof_of_life_analyzer = ProofOfLifeAnalyzer(
     config=ProofOfLifeConfig(
         confidence_threshold=settings.proof_of_life_confidence_threshold,
@@ -184,6 +192,7 @@ humanitarian_verification_service = HumanitarianVerificationService()
 # Initialize evidence access control service
 from services.artifact_access import ArtifactAccessService
 from services.evidence_access_control import EvidenceAccessControl
+from services.rate_limiter import rate_limiter
 
 # Create artifact access service and wrap with evidence access control
 artifact_access_service_instance = ArtifactAccessService(
@@ -200,6 +209,7 @@ evidence_access_control = EvidenceAccessControl(artifact_access_service_instance
 # scenarios stay consistent.
 app.state.humanitarian_verification_service = humanitarian_verification_service
 app.state.artifact_access_control = evidence_access_control
+app.state.rate_limiter = rate_limiter
 
 
 class InferenceRequest(BaseModel):
@@ -451,6 +461,12 @@ async def monitor_requests(request: Request, call_next):
             ).model_dump(),
         )
 
+    from services.rate_limiter import evaluate_rate_limit
+
+    rate_limit_response = evaluate_rate_limit(request)
+    if rate_limit_response is not None:
+        return rate_limit_response
+
     from services.load_shedder import evaluate_load_shed
 
     shed_response = evaluate_load_shed(request)
@@ -464,6 +480,13 @@ async def monitor_requests(request: Request, call_next):
     try:
         response = await call_next(request)
         status_code = response.status_code
+
+        # Attach rate limit metadata headers if present
+        rl_res = getattr(request.state, "rate_limit_result", None)
+        if rl_res is not None:
+            response.headers["X-RateLimit-Limit"] = str(rl_res.limit)
+            response.headers["X-RateLimit-Remaining"] = str(rl_res.remaining)
+            response.headers["X-RateLimit-Reset"] = str(rl_res.reset_seconds)
     except asyncio.CancelledError as e:
         status_code = 499
         logger.warning(f"Request {path} cancelled during shutdown. Dead-lettering.")
@@ -488,14 +511,18 @@ async def monitor_requests(request: Request, call_next):
         if hasattr(request.app.state, "active_requests"):
             request.app.state.active_requests -= 1
         latency = time.time() - start_time
+        # Bound the endpoint label to the matched route template so ids in
+        # the path (task/artifact/dead-letter-item ids) never become label
+        # values (see metrics.py's cardinality guidance, issue #988).
+        bounded_endpoint = metrics.bounded_endpoint_label(path)
         metrics.REQUEST_COUNT.labels(
             method=request.method,
-            endpoint=path,
+            endpoint=bounded_endpoint,
             http_status=status_code,
         ).inc()
-        metrics.REQUEST_LATENCY.labels(method=request.method, endpoint=path).observe(
-            latency
-        )
+        metrics.REQUEST_LATENCY.labels(
+            method=request.method, endpoint=bounded_endpoint
+        ).observe(latency)
 
         monitored_prefixes = ("/ai/", "/v1/ai/")
         if any(path.startswith(p) for p in monitored_prefixes):
@@ -717,13 +744,14 @@ async def _legacy_verify_humanitarian_claim(request: HumanitarianVerificationReq
     logger.info("[legacy] Processing humanitarian verification request")
 
     try:
+        timeout = clamp_request_timeout(request.timeout, "/ai/humanitarian/verify")
         try:
             result = humanitarian_verification_service.verify_claim(
                 aid_claim=request.aid_claim,
                 supporting_evidence=request.supporting_evidence,
                 context_factors=request.context_factors,
                 provider_preference=request.provider_preference,
-                timeout=request.timeout,
+                timeout=timeout,
             )
         except TypeError as exc:
             if "timeout" in str(exc):

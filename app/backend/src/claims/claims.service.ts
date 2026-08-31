@@ -8,7 +8,6 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateClaimDto } from './dto/create-claim.dto';
 import { ClaimReceiptDto, SendReceiptShareDto } from './dto/claim-receipt.dto';
@@ -135,6 +134,8 @@ export class ClaimsService {
           createClaimDto.recipientRef,
         ),
         evidenceRef: createClaimDto.evidenceRef,
+        importJobId: createClaimDto.importJobId,
+        importRowNumber: createClaimDto.importRowNumber,
         expiresAt:
           createClaimDto.expiresAt ??
           new Date(
@@ -230,52 +231,61 @@ export class ClaimsService {
 
     let sorobanTransaction: SorobanTransaction | undefined;
     if (this.onchainEnabled && this.onchainAdapter) {
-      const packageId = this.generateMockPackageId(id);
-      const tokenAddress = this.getTokenAddressForClaim(claim);
-      const correlationId = `disburse-${id}-${Date.now()}`;
+      try {
+        const packageId = await this.getPackageIdForClaim(id);
+        const tokenAddress = this.getTokenAddressForClaim(claim);
+        const correlationId = `disburse-${id}-${Date.now()}`;
 
-      sorobanTransaction =
-        await this.sorobanTransactionService.createTransaction({
-          claimId: id,
-          operation: SorobanOperationType.disburse_claim,
-          packageId,
-          operatorAddress: 'admin',
-          recipientAddress: this.encryptionService.decrypt(claim.recipientRef),
-          amount: claim.amount.toString(),
-          tokenAddress,
-          correlationId,
-          metadata: {
-            campaignId: claim.campaignId,
-            claimAmount: claim.amount,
-            originalClaimStatus: claim.status,
+        sorobanTransaction =
+          await this.sorobanTransactionService.createTransaction({
+            claimId: id,
+            operation: SorobanOperationType.disburse_claim,
+            packageId,
+            operatorAddress: 'admin',
+            recipientAddress: this.encryptionService.decrypt(
+              claim.recipientRef,
+            ),
+            amount: claim.amount.toString(),
+            tokenAddress,
+            correlationId,
+            metadata: {
+              campaignId: claim.campaignId,
+              claimAmount: claim.amount,
+              originalClaimStatus: claim.status,
+              receiptPointer,
+            },
+            maxAttempts: 5,
+          });
+
+        await this.sorobanTransactionScheduler.scheduleTransaction(
+          sorobanTransaction.id,
+          {
+            correlationId,
+            priority: 1,
+          },
+        );
+
+        this.logger.log(
+          'Created Soroban transaction with lifecycle tracking for claim disbursement',
+          {
+            claimId: id,
+            transactionId: sorobanTransaction.id,
+            packageId,
+            correlationId,
             receiptPointer,
           },
-          maxAttempts: 5,
-        });
+        );
 
-      await this.sorobanTransactionScheduler.scheduleTransaction(
-        sorobanTransaction.id,
-        {
-          correlationId,
-          priority: 1,
-        },
-      );
-
-      this.logger.log(
-        'Created Soroban transaction with lifecycle tracking for claim disbursement',
-        {
+        this.metricsService.incrementCounter('soroban_disbursement_scheduled', {
           claimId: id,
           transactionId: sorobanTransaction.id,
-          packageId,
-          correlationId,
-          receiptPointer,
-        },
-      );
-
-      this.metricsService.incrementCounter('soroban_disbursement_scheduled', {
-        claimId: id,
-        transactionId: sorobanTransaction.id,
-      });
+        });
+      } catch (error) {
+        this.loggerService.error(
+          `Failed to create or schedule Soroban transaction for claim ${id}`,
+          error instanceof Error ? error.message : String(error),
+        );
+      }
     }
 
     const updatedClaim = await this.transitionStatus(
@@ -296,11 +306,20 @@ export class ClaimsService {
     return updatedClaim;
   }
 
-  private generateMockPackageId(claimId: string): string {
-    const hash = createHash('sha256')
-      .update(`package-${claimId}`)
-      .digest('hex');
-    return BigInt('0x' + hash.substring(0, 16)).toString();
+  private async getPackageIdForClaim(claimId: string): Promise<string> {
+    const correlation = await this.prisma.sorobanEventCorrelation.findFirst({
+      where: {
+        claimId,
+        eventTopic: 'package_created',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (correlation?.packageId) {
+      return correlation.packageId;
+    }
+
+    throw new Error(`Package ID not found for claim ${claimId}`);
   }
 
   private getTokenAddressForClaim(
@@ -452,7 +471,7 @@ export class ClaimsService {
       };
     }
 
-    const packageId = this.generateMockPackageId(claimId);
+    const packageId = await this.getPackageIdForClaim(claimId);
 
     const revokeResult = await cleanupAdapter.revokeAidPackage({
       packageId,
@@ -642,11 +661,12 @@ export class ClaimsService {
     });
 
     return logs
-      .filter((log) => log.action.startsWith('status_changed_to_'))
-      .map((log) => {
+      .filter(log => log.action.startsWith('status_changed_to_'))
+      .map(log => {
         const metadata = log.metadata as Record<string, any> | null;
         const txHash = metadata?.transactionHash as string | undefined;
-        const network = this.configService.get<string>('STELLAR_NETWORK') ?? 'testnet';
+        const network =
+          this.configService.get<string>('STELLAR_NETWORK') ?? 'testnet';
         return {
           status: log.action.replace('status_changed_to_', ''),
           timestamp: log.timestamp.toISOString(),

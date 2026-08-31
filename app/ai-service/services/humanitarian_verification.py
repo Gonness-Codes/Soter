@@ -7,6 +7,7 @@ import time
 import metrics
 
 from config import settings
+from exceptions import ProviderExhaustedError
 from services.humanitarian_prompt import (
     HumanitarianPromptEngine,
     default_prompt_registry,
@@ -146,8 +147,9 @@ class HumanitarianVerificationService:
                             "Humanitarian verification attempt failed: %s", err
                         )
 
-            raise RuntimeError(
-                "All humanitarian verification attempts failed: " + " | ".join(errors)
+            raise ProviderExhaustedError(
+                "All LLM providers were attempted and exhausted: " + " | ".join(errors),
+                details={"attempted": errors},
             )
         finally:
             latency = time.time() - start_time

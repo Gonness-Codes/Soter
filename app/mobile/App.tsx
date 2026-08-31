@@ -21,6 +21,8 @@ import {
   useNotification,
 } from './src/contexts/NotificationContext';
 import { SaverModeProvider } from './src/contexts/SaverModeContext';
+import { SyncDeferralProvider } from './src/contexts/SyncDeferralContext';
+import { LanguageProvider } from './src/contexts/LanguageContext';
 import { UpdateProvider, useUpdate } from './src/contexts/UpdateContext';
 import {
   CrashReportingProvider,
@@ -93,18 +95,20 @@ const AppInner = () => {
   return (
     <WalletProvider>
       <BiometricProvider>
-        <SyncProvider>
-          <NavigationContainer
-            linking={linking}
-            theme={navTheme}
-            ref={navigationRef}
-            onReady={() => setIsNavReady(true)}
-          >
-            <AppNavigator />
-            <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
-          </NavigationContainer>
-          <ReleaseNotesModal />
-        </SyncProvider>
+        <SyncDeferralProvider>
+          <SyncProvider>
+            <NavigationContainer
+              linking={linking}
+              theme={navTheme}
+              ref={navigationRef}
+              onReady={() => setIsNavReady(true)}
+            >
+              <AppNavigator />
+              <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+            </NavigationContainer>
+            <ReleaseNotesModal />
+          </SyncProvider>
+        </SyncDeferralProvider>
       </BiometricProvider>
     </WalletProvider>
   );
@@ -134,13 +138,17 @@ const CrashReportingGate: React.FC = () => {
     >
       <SafeAreaProvider>
         <ThemeProvider>
-          <UpdateProvider>
-            <SaverModeProvider>
-              <NotificationProvider>
-                <AppInner />
-              </NotificationProvider>
-            </SaverModeProvider>
-          </UpdateProvider>
+          <LanguageProvider>
+            <UpdateProvider>
+              <SaverModeProvider>
+                <SyncDeferralProvider>
+                  <NotificationProvider>
+                    <AppInner />
+                  </NotificationProvider>
+                </SyncDeferralProvider>
+              </SaverModeProvider>
+            </UpdateProvider>
+          </LanguageProvider>
         </ThemeProvider>
       </SafeAreaProvider>
     </ErrorBoundary>
