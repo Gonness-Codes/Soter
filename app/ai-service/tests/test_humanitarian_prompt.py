@@ -12,7 +12,9 @@ from services.humanitarian_prompt import (
 
 
 class CustomTestPrompt(VerificationPrompt):
-    def __init__(self, name: str = "custom_test", version: str = "v1", desc: str = "Test prompt"):
+    def __init__(
+        self, name: str = "custom_test", version: str = "v1", desc: str = "Test prompt"
+    ):
         self._name = name
         self._version = version
         self._desc = desc
@@ -86,7 +88,9 @@ class TestPromptRegistry:
             self.registry.register(p1_duplicate)
 
         assert "already registered" in str(exc_info.value)
-        assert "Prompts are immutable; register a new version instead" in str(exc_info.value)
+        assert "Prompts are immutable; register a new version instead" in str(
+            exc_info.value
+        )
 
     def test_unknown_prompt_name_raises_value_error(self):
         with pytest.raises(ValueError) as exc_info:
@@ -201,7 +205,10 @@ class TestHumanitarianPromptEngine:
         )
 
         assert "Humanitarian Standard Verification Task\n\n" in prompt_v1["user"]
-        assert "Humanitarian Standard Verification Task (v2 Enhanced)\n\n" in prompt_v2["user"]
+        assert (
+            "Humanitarian Standard Verification Task (v2 Enhanced)\n\n"
+            in prompt_v2["user"]
+        )
         assert prompt_v1["system"] != prompt_v2["system"]
 
     def test_fallback_prompt_version_selection(self):

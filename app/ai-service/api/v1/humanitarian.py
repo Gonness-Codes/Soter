@@ -326,7 +326,9 @@ async def verify_humanitarian_claim(
         if not prompt_version:
             if hasattr(humanitarian_verification_service, "get_prompt_version"):
                 try:
-                    pv = humanitarian_verification_service.get_prompt_version("humanitarian_primary")
+                    pv = humanitarian_verification_service.get_prompt_version(
+                        "humanitarian_primary"
+                    )
                     prompt_version = pv if isinstance(pv, str) else "v1"
                 except Exception:
                     prompt_version = "v1"
@@ -356,7 +358,9 @@ async def verify_humanitarian_claim(
             prompt_version=prompt_version,
         )
 
-        verification: Dict[str, Any] = raw.get("verification") if isinstance(raw, dict) else {}
+        verification: Dict[str, Any] = (
+            raw.get("verification") if isinstance(raw, dict) else {}
+        )
         if not isinstance(verification, dict):
             verification = {}
 

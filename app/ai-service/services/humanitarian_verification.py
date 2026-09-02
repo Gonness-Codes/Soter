@@ -38,12 +38,16 @@ class HumanitarianVerificationService:
         if hasattr(settings, "humanitarian_primary_prompt_version"):
             primary_v = settings.humanitarian_primary_prompt_version
             if self.prompt_registry.has("humanitarian_primary", primary_v):
-                self.prompt_registry.set_active_version("humanitarian_primary", primary_v)
+                self.prompt_registry.set_active_version(
+                    "humanitarian_primary", primary_v
+                )
 
         if hasattr(settings, "humanitarian_fallback_prompt_version"):
             fallback_v = settings.humanitarian_fallback_prompt_version
             if self.prompt_registry.has("humanitarian_fallback", fallback_v):
-                self.prompt_registry.set_active_version("humanitarian_fallback", fallback_v)
+                self.prompt_registry.set_active_version(
+                    "humanitarian_fallback", fallback_v
+                )
 
     def _get_breaker(self, provider_name: str) -> CircuitBreaker:
         if provider_name not in self.breakers:
@@ -72,7 +76,9 @@ class HumanitarianVerificationService:
 
             # Resolve primary and fallback prompt templates from registry
             pri_ver = primary_prompt_version or prompt_version
-            primary_prompt_obj = self.prompt_registry.get("humanitarian_primary", version=pri_ver)
+            primary_prompt_obj = self.prompt_registry.get(
+                "humanitarian_primary", version=pri_ver
+            )
             primary_prompt = primary_prompt_obj.build_prompt(
                 aid_claim=aid_claim,
                 supporting_evidence=evidence,
@@ -80,9 +86,15 @@ class HumanitarianVerificationService:
             )
 
             fb_ver = fallback_prompt_version
-            if fb_ver is None and prompt_version and self.prompt_registry.has("humanitarian_fallback", prompt_version):
+            if (
+                fb_ver is None
+                and prompt_version
+                and self.prompt_registry.has("humanitarian_fallback", prompt_version)
+            ):
                 fb_ver = prompt_version
-            fallback_prompt_obj = self.prompt_registry.get("humanitarian_fallback", version=fb_ver)
+            fallback_prompt_obj = self.prompt_registry.get(
+                "humanitarian_fallback", version=fb_ver
+            )
             fallback_prompt = fallback_prompt_obj.build_prompt(
                 aid_claim=aid_claim,
                 supporting_evidence=evidence,

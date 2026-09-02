@@ -120,9 +120,7 @@ class CacheInvalidationHelper:
             )
         return deleted
 
-    def invalidate_verification_by_prompt_version(
-        self, prompt_version: str
-    ) -> int:
+    def invalidate_verification_by_prompt_version(self, prompt_version: str) -> int:
         """
         Invalidate cached AI verification responses produced by a specific
         prompt version, e.g. after updating the active prompt template version.

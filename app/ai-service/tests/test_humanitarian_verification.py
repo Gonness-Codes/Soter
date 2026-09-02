@@ -135,7 +135,9 @@ class TestHumanitarianVerificationService:
         assert result["prompt_name"] == "humanitarian_primary"
         assert result["prompt_version"] == "v1"
         assert "Sphere Criteria" in captured_prompts[0]["user"]
-        assert "Humanitarian Standard Verification Task\n\n" in captured_prompts[0]["user"]
+        assert (
+            "Humanitarian Standard Verification Task\n\n" in captured_prompts[0]["user"]
+        )
 
     def test_verify_claim_version_switch_uses_actual_v2_prompt(self, monkeypatch):
         captured_prompts = []
@@ -172,7 +174,10 @@ class TestHumanitarianVerificationService:
         assert result["prompt_name"] == "humanitarian_primary"
         assert result["prompt_version"] == "v2"
         # Assert the prompt actually sent to the LLM matches v2 template
-        assert "Humanitarian Standard Verification Task (v2 Enhanced)" in captured_prompts[0]["user"]
+        assert (
+            "Humanitarian Standard Verification Task (v2 Enhanced)"
+            in captured_prompts[0]["user"]
+        )
 
     def test_verify_claim_with_explicit_request_prompt_version(self, monkeypatch):
         captured_prompts = []
@@ -205,7 +210,10 @@ class TestHumanitarianVerificationService:
         )
 
         assert result["prompt_version"] == "v2"
-        assert "Humanitarian Standard Verification Task (v2 Enhanced)" in captured_prompts[0]["user"]
+        assert (
+            "Humanitarian Standard Verification Task (v2 Enhanced)"
+            in captured_prompts[0]["user"]
+        )
 
     def test_get_prompt_version(self):
         assert self.service.get_prompt_version("humanitarian_primary") in ["v1", "v2"]
