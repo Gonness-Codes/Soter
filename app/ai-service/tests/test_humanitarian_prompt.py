@@ -244,3 +244,15 @@ class TestHumanitarianPromptEngine:
             context_factors={},
         )
         assert "v2 Enhanced" in prompt_after_switch["user"]
+
+    def test_build_repair_prompt(self):
+        repair = self.engine.build_repair_prompt(
+            original_user_prompt="Original request prompt text",
+            malformed_content='{"verdict": "credible"',
+            error_message="Unterminated string",
+        )
+        assert "system" in repair and "user" in repair
+        assert "Return ONLY corrected, strictly valid JSON" in repair["system"]
+        assert "Unterminated string" in repair["user"]
+        assert '{"verdict": "credible"' in repair["user"]
+        assert "Original request prompt text" in repair["user"]
